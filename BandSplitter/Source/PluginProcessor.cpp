@@ -15,8 +15,12 @@ BandSplitterAudioProcessor::BandSplitterAudioProcessor()
     : AudioProcessor(createProperties()),
       bands(
           new juce::AudioParameterInt({"bands", 1}, "Bands", 2, MAX_BANDS, 3)),
-      bandParams({nullptr}) {
+      bandParams({nullptr}),
+      type(new juce::AudioParameterChoice({"type", 1}, "Filter type",
+                                          juce::StringArray{"Linkwitz-Riley 2"},
+                                          0)) {
     this->addParameter(this->bands);
+    this->addParameter(this->type);
     for (int i = 0; i < MAX_BANDS - 1; i++) {
         this->bandParams[i] = new juce::AudioParameterFloat(
             {"split freq " + std::to_string(i + 1), 1},
@@ -128,36 +132,39 @@ void BandSplitterAudioProcessor::processMono(juce::AudioBuffer<float>& buffer) {
             filters[i].setParameters(
                 LOWPASS,
                 {.f = *this->bandParams[i], .Q = .70710678118f, .gain = 0});
+            filters[i + MAX_BANDS - 1].setParameters(
+                HIGHPASS,
+                {.f = *this->bandParams[i], .Q = .70710678118f, .gain = 0});
         }
         return;
     }
 
+    const int t = *type;
+
+    // Copy buffer data
     for (int i = 0; i < n - 1; i++) {
-        float* a = BUF(i);
-        float* b = BUF(i + 1);
+        std::memcpy(BUF(i + 1), BUF(i), samples * sizeof(float));
+    }
 
-        // Copy buffer data
-        std::memcpy(b, a, samples * sizeof(float));
+    for (int i = 0; i < n - 1; i++) {
+        float *data = BUF(i), *next = BUF(i + 1);
 
-        BiquadFilter& filter = filters[i];
+        BiquadFilter &lp = filters[i], &hp = filters[i + MAX_BANDS - 1];
 
         // Update filter
         const float f = *this->bandParams[i];
-        if (filter.getParameters().f != f)
-            filter.setParameters(LOWPASS,
-                                 {.f = f, .Q = .70710678118f, .gain = 0});
+        if (lp.getParameters().f != f) {
+            lp.setParameters(LOWPASS, {.f = f, .Q = .70710678118f, .gain = 0});
+            hp.setParameters(HIGHPASS, {.f = f, .Q = .70710678118f, .gain = 0});
+        }
 
         // Run filter
-        filter.processBlock(a, samples, states[i]);
-        filter.processBlock(a, samples, states[i - 1 + MAX_BANDS]);
-
-        // Subtract from previous channel
-        for (int j = 0; j < samples; j++) {
-            b[j] -= a[j];
-        }
+        lp.processBlockMul(data, samples, lp_states + (i * 6), 2);
+        hp.processBlockMul(next, samples, hp_states + (i * 6), 2);
     }
-    if (!std::isfinite(BUF(0)[0])) {
-        std::memset(states, 0, sizeof(states));
+    if (!std::isfinite(BUF(0)[samples - 1])) {
+        std::memset(lp_states, 0, sizeof(lp_states));
+        std::memset(hp_states, 0, sizeof(hp_states));
     }
 }
 
@@ -180,42 +187,47 @@ void BandSplitterAudioProcessor::processStereo(
             filters[i].setParameters(
                 LOWPASS,
                 {.f = *this->bandParams[i], .Q = .70710678118f, .gain = 0});
+            filters[i + MAX_BANDS - 1].setParameters(
+                HIGHPASS,
+                {.f = *this->bandParams[i], .Q = .70710678118f, .gain = 0});
         }
         return;
     }
 
     for (int i = 0; i < n - 1; i++) {
-        float* l = BUF(i * 2);
-        float* r = BUF(i * 2 + 1);
-        float* l2 = BUF(i * 2 + 2);
-        float* r2 = BUF(i * 2 + 3);
+        float *l = BUF(i * 2), *r = BUF(i * 2 + 1);
+        float *l2 = BUF(i * 2 + 2), *r2 = BUF(i * 2 + 3);
 
-        // Copy buffer data
-        std::memcpy(l2, l, bufSize);
-        std::memcpy(r2, r, bufSize);
-
-        BiquadFilter& filter = filters[i];
+        BiquadFilter &lp = filters[i], &hp = filters[i + MAX_BANDS - 1];
 
         // Update filter
         const float f = *this->bandParams[i];
-        if (filter.getParameters().f != f)
-            filter.setParameters(LOWPASS,
-                                 {.f = f, .Q = .70710678118f, .gain = 0});
+        if (lp.getParameters().f != f) {
+            lp.setParameters(LOWPASS, {.f = f, .Q = .70710678118f, .gain = 0});
+            hp.setParameters(HIGHPASS, {.f = f, .Q = .70710678118f, .gain = 0});
+        }
+
+        // Copy buffer data
+        std::memcpy(l2, l, samples * sizeof(float));
+        std::memcpy(r2, r, samples * sizeof(float));
 
         // Run filter
-        filter.processBlock(l, samples, states[i]);
-        filter.processBlock(r, samples, states[MAX_BANDS - 1 + i]);
-        filter.processBlock(l, samples, states[MAX_BANDS * 2 - 2 + i]);
-        filter.processBlock(r, samples, states[MAX_BANDS * 3 - 3 + i]);
-
-        // Subtract from previous channel
-        for (int j = 0; j < samples; j++) {
-            l2[j] -= l[j];
-            r2[j] -= r[j];
+        if (i > 0) {
+            lp.processBlockMul(BUF((i - 1) * 2), samples,
+                               lp_states + (i * 6 + 12 * MAX_BANDS - 12), 2);
+            lp.processBlockMul(BUF((i - 1) * 2 + 1), samples,
+                               lp_states + (i * 6 + 18 * MAX_BANDS - 18), 2);
         }
+        lp.processBlockMul(l, samples, lp_states + (i * 6), 2);
+        lp.processBlockMul(r, samples, lp_states + (i * 6 + 6 * MAX_BANDS - 6),
+                           2);
+        hp.processBlockMul(l2, samples, hp_states + (i * 6), 2);
+        hp.processBlockMul(r2, samples, hp_states + (i * 6 + 6 * MAX_BANDS - 6),
+                           2);
     }
-    if (!std::isfinite(BUF(0)[0])) {
-        std::memset(states, 0, sizeof(states));
+    if (!std::isfinite(BUF(0)[samples - 1])) {
+        std::memset(lp_states, 0, sizeof(lp_states));
+        std::memset(hp_states, 0, sizeof(hp_states));
     }
 }
 
@@ -230,8 +242,6 @@ void BandSplitterAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     if (inputs == 0) return;
     if (outputs == 0) return;
     if (outputs <= inputs) return;
-
-    // TODO maybe this time use listeners for modified params
 
     if (inputs == 1) {
         processMono(buffer);
@@ -251,6 +261,7 @@ void BandSplitterAudioProcessor::getStateInformation(
     juce::MemoryOutputStream stream(destData, true);
     stream.writeInt(MAX_BANDS);
     stream.writeFloat(GET_PARAM_NORMALIZED(bands));
+    stream.writeFloat(GET_PARAM_NORMALIZED(type));
     for (int i = 0; i < MAX_BANDS - 1; i++) {
         stream.writeFloat(GET_PARAM_NORMALIZED(bandParams[i]));
     }
@@ -261,8 +272,11 @@ void BandSplitterAudioProcessor::setStateInformation(const void* data,
     juce::MemoryInputStream stream(data, static_cast<size_t>(sizeInBytes),
                                    false);
     int n = stream.readInt();
+    if (n > MAX_BANDS) n = MAX_BANDS;
+
     bands->setValueNotifyingHost(stream.readFloat());
-    for (int i = 0; i < MAX_BANDS - 1 && i < n - 1; i++) {
+    type->setValueNotifyingHost(stream.readFloat());
+    for (int i = 0; i < n - 1; i++) {
         this->bandParams[i]->setValueNotifyingHost(stream.readFloat());
     }
 }

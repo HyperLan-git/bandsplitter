@@ -43,7 +43,8 @@ void BandSplitterAudioProcessorEditor::resized() {
     removeBand.setBounds(100, 0, 100, 50);
     bands.setBounds(200, 0, 100, 50);
     for (int i = 0; i < MAX_BANDS - 1; i++) {
-        this->splits[i]->setBounds((i % 8) * 100, 50 + (i / 8) * 100, 100, 100);
+        this->splits[i]->setBounds((i % 8) * 100, 100 + (i / 8) * 100, 100,
+                                   100);
     }
 }
 

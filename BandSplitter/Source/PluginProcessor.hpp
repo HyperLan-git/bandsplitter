@@ -1,6 +1,8 @@
 #pragma once
 
-constexpr int MAX_BANDS = 16;  // TODO , MAX_ORDER = 4;
+constexpr int MAX_BANDS = 16;
+
+enum SplitType { LR4 };
 
 #include "JuceHeader.h"
 
@@ -49,6 +51,7 @@ class BandSplitterAudioProcessor : public juce::AudioProcessor {
         // assert(split < MAX_BANDS - 1);
         return bandParams[split];
     }
+    inline juce::AudioParameterChoice* getTypeParam() { return type; }
 
    private:
     juce::AudioProcessor::BusesProperties createProperties();
@@ -59,12 +62,13 @@ class BandSplitterAudioProcessor : public juce::AudioProcessor {
     int lastBands = 0;
     // We have (bands - 1) splits
     juce::AudioParameterInt* bands;
-    // juce::AudioParameterInt* order;
+    juce::AudioParameterChoice* type;
     std::array<juce::AudioParameterFloat*, MAX_BANDS - 1> bandParams;
 
-    BiquadFilter filters[MAX_BANDS - 1] = {};
+    BiquadFilter filters[(MAX_BANDS - 1) * 2] = {};
 
-    struct SOState states[4 * MAX_BANDS - 4] = {};
+    float lp_states[24 * MAX_BANDS - 24] = {};
+    float hp_states[12 * MAX_BANDS - 12] = {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BandSplitterAudioProcessor)
 };

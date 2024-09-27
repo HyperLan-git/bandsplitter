@@ -127,3 +127,31 @@ void BiquadFilter::processBlock(float* buffer, int size,
         buffer[i] = yn;
     }
 }
+
+void BiquadFilter::processBlockMul(float* buffer, int size, State state,
+                                   std::size_t times) const {
+    if (times == 0) return;
+    for (int i = 0; i < size; i++) {
+        float xn = buffer[i], x1 = state[0], x2 = state[1], yn = 0, y1 = 0,
+              y2 = 0;
+        for (std::size_t j = 0; j < times; j++) {
+            y1 = state[j * 2 + 2];
+            y2 = state[j * 2 + 3];
+
+            yn = coefficients.b0 * xn + coefficients.b1 * x1 +
+                 coefficients.b2 * x2 - coefficients.a1 * y1 -
+                 coefficients.a2 * y2;
+            yn /= coefficients.a0;
+
+            state[j * 2 + 1] = state[j * 2];  // x2 = x1
+            state[j * 2] = xn;                // x1 = xn
+
+            xn = yn;
+            x1 = y1;
+            x2 = y2;
+        }
+        state[times * 2 + 1] = state[times * 2];  // y2 = y1
+        state[times * 2] = yn;                    // y1 = yn
+        buffer[i] = yn;
+    }
+}
