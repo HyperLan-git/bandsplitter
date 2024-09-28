@@ -1,5 +1,7 @@
 #include "PluginEditor.hpp"
 
+// TODO replace those shitty knobs omfg
+
 BandSplitterAudioProcessorEditor::BandSplitterAudioProcessorEditor(
     BandSplitterAudioProcessor& p)
     : AudioProcessorEditor(&p),
@@ -8,9 +10,12 @@ BandSplitterAudioProcessorEditor::BandSplitterAudioProcessorEditor(
       removeBand("REMOVE"),
       bands("bands", "Bands : " + std::to_string(*p.getBandParam())),
       listener(p.getBandParam(), bands) {
+    juce::AudioParameterInt* bandParam = p.getBandParam();
+    int b = *bandParam;
     for (int i = 0; i < MAX_BANDS - 1; i++) {
         this->splits[i].emplace(p.getFreqParam(i));
         this->addAndMakeVisible(*this->splits[i]);
+        if (b < i + 2) this->splits[i]->setVisible(false);
     }
 
     this->addAndMakeVisible(addBand);
@@ -19,14 +24,15 @@ BandSplitterAudioProcessorEditor::BandSplitterAudioProcessorEditor(
 
     bands.setJustificationType(juce::Justification::centred);
 
-    juce::AudioParameterInt* bandParam = p.getBandParam();
-    addBand.onClick = [bandParam]() {
-        bandParam->setValueNotifyingHost(
-            bandParam->convertTo0to1(*bandParam + 1));
+    addBand.onClick = [=]() {
+        int val = *bandParam + 1;
+        bandParam->setValueNotifyingHost(bandParam->convertTo0to1(val));
+        if (val < MAX_BANDS + 1) splits[val - 2]->setVisible(true);
     };
-    removeBand.onClick = [bandParam]() {
-        bandParam->setValueNotifyingHost(
-            bandParam->convertTo0to1(*bandParam - 1));
+    removeBand.onClick = [=]() {
+        int val = *bandParam - 1;
+        bandParam->setValueNotifyingHost(bandParam->convertTo0to1(val));
+        if (val > 1) splits[val - 1]->setVisible(false);
     };
 
     setSize(800, 500);

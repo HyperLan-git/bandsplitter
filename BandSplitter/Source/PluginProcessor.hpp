@@ -1,6 +1,6 @@
 #pragma once
 
-constexpr int MAX_BANDS = 16;
+constexpr int MAX_BANDS = 8;
 
 enum SplitType { LR4 };
 
@@ -8,6 +8,8 @@ enum SplitType { LR4 };
 
 #include "PluginEditor.hpp"
 #include "BiquadFilter.hpp"
+
+constexpr size_t STATE_BLK = (MAX_BANDS - 1) * 6;
 
 #define GET_PARAM_NORMALIZED(param) (param->convertTo0to1(*param))
 #define SET_PARAM_NORMALIZED(param, value) \
@@ -67,8 +69,8 @@ class BandSplitterAudioProcessor : public juce::AudioProcessor {
 
     BiquadFilter filters[(MAX_BANDS - 1) * 2] = {};
 
-    float lp_states[24 * MAX_BANDS - 24] = {};
-    float hp_states[12 * MAX_BANDS - 12] = {};
+    float hp_states[STATE_BLK * MAX_BANDS * 2] = {};
+    float lp_states[STATE_BLK * MAX_BANDS * 2] = {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BandSplitterAudioProcessor)
 };

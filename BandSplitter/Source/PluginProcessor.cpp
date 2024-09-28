@@ -17,7 +17,7 @@ BandSplitterAudioProcessor::BandSplitterAudioProcessor()
           new juce::AudioParameterInt({"bands", 1}, "Bands", 2, MAX_BANDS, 3)),
       bandParams({nullptr}),
       type(new juce::AudioParameterChoice({"type", 1}, "Filter type",
-                                          juce::StringArray{"Linkwitz-Riley 2"},
+                                          juce::StringArray{"Linkwitz-Riley 4"},
                                           0)) {
     this->addParameter(this->bands);
     this->addParameter(this->type);
@@ -25,9 +25,13 @@ BandSplitterAudioProcessor::BandSplitterAudioProcessor()
         this->bandParams[i] = new juce::AudioParameterFloat(
             {"split freq " + std::to_string(i + 1), 1},
             "Split frequency " + std::to_string(i + 1), 20, 20000,
-            std::round(std::pow((float)i / MAX_BANDS, 1.5f) * 200) * 100);
+            100 + std::round(std::pow((float)i / MAX_BANDS, 2) * 200) * 100);
         this->addParameter(this->bandParams[i]);
     }
+    this->filters[0].setParameters(LOWPASS,
+                                   {.f = 20, .Q = .70710678118f, .gain = 0});
+    this->filters[MAX_BANDS - 1].setParameters(
+        HIGHPASS, {.f = 20, .Q = .70710678118f, .gain = 0});
 }
 
 BandSplitterAudioProcessor::~BandSplitterAudioProcessor() {}
@@ -116,6 +120,9 @@ bool BandSplitterAudioProcessor::isBusesLayoutSupported(
 
 #define BUF(i) buffer.getWritePointer(i)
 
+#define GET_STATE_BLOCK(ptr, BLK_SIZE, blk, filter, loops) \
+    ((ptr) + ((blk) * (BLK_SIZE) + (filter) * (2 * (loops) + 2)))
+
 void BandSplitterAudioProcessor::processMono(juce::AudioBuffer<float>& buffer) {
     const int inputs = getTotalNumInputChannels();
     const int outputs = getTotalNumOutputChannels();
@@ -129,22 +136,21 @@ void BandSplitterAudioProcessor::processMono(juce::AudioBuffer<float>& buffer) {
         lastBands = n;
         buffer.clear();
         for (int i = 0; i < n - 1; i++) {
-            filters[i].setParameters(
-                LOWPASS,
-                {.f = *this->bandParams[i], .Q = .70710678118f, .gain = 0});
+            float f = *this->bandParams[i];
+            filters[i].setParameters(LOWPASS,
+                                     {.f = f, .Q = .70710678118f, .gain = 0});
             filters[i + MAX_BANDS - 1].setParameters(
-                HIGHPASS,
-                {.f = *this->bandParams[i], .Q = .70710678118f, .gain = 0});
+                HIGHPASS, {.f = f, .Q = .70710678118f, .gain = 0});
         }
         return;
     }
-
-    const int t = *type;
 
     // Copy buffer data
     for (int i = 0; i < n - 1; i++) {
         std::memcpy(BUF(i + 1), BUF(i), samples * sizeof(float));
     }
+
+    const int t = *type;
 
     for (int i = 0; i < n - 1; i++) {
         float *data = BUF(i), *next = BUF(i + 1);
@@ -159,10 +165,18 @@ void BandSplitterAudioProcessor::processMono(juce::AudioBuffer<float>& buffer) {
         }
 
         // Run filter
-        lp.processBlockMul(data, samples, lp_states + (i * 6), 2);
-        hp.processBlockMul(next, samples, hp_states + (i * 6), 2);
+        for (int j = 0; j <= i; j++) {
+            lp.processBlockMul(BUF(j), samples,
+                               GET_STATE_BLOCK(lp_states, STATE_BLK, j, i, 2),
+                               2);
+        }
+        for (int j = n - 1; j > i; j--) {
+            hp.processBlockMul(
+                BUF(j - 1), samples,
+                GET_STATE_BLOCK(hp_states, STATE_BLK, j - 1, i, 2), 2);
+        }
     }
-    if (!std::isfinite(BUF(0)[samples - 1])) {
+    if (!std::isfinite(BUF(0)[0])) {
         std::memset(lp_states, 0, sizeof(lp_states));
         std::memset(hp_states, 0, sizeof(hp_states));
     }
@@ -184,14 +198,19 @@ void BandSplitterAudioProcessor::processStereo(
         lastBands = n;
         buffer.clear();
         for (int i = 0; i < n - 1; i++) {
-            filters[i].setParameters(
-                LOWPASS,
-                {.f = *this->bandParams[i], .Q = .70710678118f, .gain = 0});
+            float f = *this->bandParams[i];
+            filters[i].setParameters(LOWPASS,
+                                     {.f = f, .Q = .70710678118f, .gain = 0});
             filters[i + MAX_BANDS - 1].setParameters(
-                HIGHPASS,
-                {.f = *this->bandParams[i], .Q = .70710678118f, .gain = 0});
+                HIGHPASS, {.f = f, .Q = .70710678118f, .gain = 0});
         }
         return;
+    }
+
+    // Copy buffer data
+    for (int i = 0; i < n - 1; i++) {
+        std::memcpy(BUF(i * 2 + 2), BUF(i * 2), bufSize);
+        std::memcpy(BUF(i * 2 + 3), BUF(i * 2 + 1), bufSize);
     }
 
     for (int i = 0; i < n - 1; i++) {
@@ -207,25 +226,27 @@ void BandSplitterAudioProcessor::processStereo(
             hp.setParameters(HIGHPASS, {.f = f, .Q = .70710678118f, .gain = 0});
         }
 
-        // Copy buffer data
-        std::memcpy(l2, l, samples * sizeof(float));
-        std::memcpy(r2, r, samples * sizeof(float));
-
-        // Run filter
-        if (i > 0) {
-            lp.processBlockMul(BUF((i - 1) * 2), samples,
-                               lp_states + (i * 6 + 12 * MAX_BANDS - 12), 2);
-            lp.processBlockMul(BUF((i - 1) * 2 + 1), samples,
-                               lp_states + (i * 6 + 18 * MAX_BANDS - 18), 2);
+        // Run filters
+        for (int j = 0; j <= i; j++) {
+            lp.processBlockMul(
+                BUF(j * 2), samples,
+                GET_STATE_BLOCK(lp_states, STATE_BLK, j * 2, i, 2), 2);
+            lp.processBlockMul(
+                BUF(j * 2 + 1), samples,
+                GET_STATE_BLOCK(lp_states, STATE_BLK, j * 2 + 1, i, 2), 2);
         }
-        lp.processBlockMul(l, samples, lp_states + (i * 6), 2);
-        lp.processBlockMul(r, samples, lp_states + (i * 6 + 6 * MAX_BANDS - 6),
-                           2);
-        hp.processBlockMul(l2, samples, hp_states + (i * 6), 2);
-        hp.processBlockMul(r2, samples, hp_states + (i * 6 + 6 * MAX_BANDS - 6),
-                           2);
+        for (int j = n - 1; j > i; j--) {
+            hp.processBlockMul(
+                BUF(j * 2), samples,
+                GET_STATE_BLOCK(hp_states, STATE_BLK, (j - 1) * 2, i, 2), 2);
+            hp.processBlockMul(
+                BUF(j * 2 + 1), samples,
+                GET_STATE_BLOCK(hp_states, STATE_BLK, (j - 1) * 2 + 1, i, 2),
+                2);
+        }
     }
-    if (!std::isfinite(BUF(0)[samples - 1])) {
+
+    if (!std::isfinite(BUF(0)[0])) {
         std::memset(lp_states, 0, sizeof(lp_states));
         std::memset(hp_states, 0, sizeof(hp_states));
     }
