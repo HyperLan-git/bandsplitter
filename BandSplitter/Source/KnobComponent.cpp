@@ -52,7 +52,8 @@ KnobComponent::KnobComponent(juce::RangedAudioParameter* param, double step)
 
     knob.setLookAndFeel(&lf);
     knob.setColour(juce::Slider::thumbColourId, juce::Colours::grey.brighter());
-    knob.setSliderStyle(juce::Slider::SliderStyle::Rotary);
+    knob.setSliderStyle(
+        juce::Slider::SliderStyle::RotaryHorizontalVerticalDrag);
     knob.setTextBoxStyle(juce::Slider::TextBoxAbove, false, 100, 20);
 
     auto range = param->getNormalisableRange();

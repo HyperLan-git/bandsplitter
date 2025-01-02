@@ -16,9 +16,9 @@ BandSplitterAudioProcessor::BandSplitterAudioProcessor()
       bands(
           new juce::AudioParameterInt({"bands", 1}, "Bands", 2, MAX_BANDS, 3)),
       bandParams({nullptr}),
-      type(new juce::AudioParameterChoice({"type", 1}, "Filter type",
-                                          juce::StringArray{"Linkwitz-Riley 4"},
-                                          0)) {
+      type(new juce::AudioParameterChoice(
+          {"type", 1}, "Filter type",
+          juce::StringArray{"Linkwitz-Riley 4", "FIR"}, 0)) {
     this->addParameter(this->bands);
     this->addParameter(this->type);
     for (int i = 0; i < MAX_BANDS - 1; i++) {
